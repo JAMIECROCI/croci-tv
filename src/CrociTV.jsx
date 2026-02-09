@@ -189,6 +189,19 @@ function classifySaleRow(accountType) {
   return { campaign: "Unknown", isTMM: false };
 }
 
+// Does a sale's campaign classification match the event's campaign group?
+function campaignMatchesEvent(saleCampaign, eventCampaignGroup) {
+  switch (eventCampaignGroup) {
+    case "tails.com":
+      return saleCampaign === "Tails.com";
+    case "HelloFresh & Green Chef":
+    case "HelloFresh Ireland":
+      return saleCampaign === "HF/GC";
+    default:
+      return true;
+  }
+}
+
 // ── Sales Tab Discovery (unified — all tabs as one pool) ─────────────
 async function discoverSalesTabGids() {
   try {
@@ -333,9 +346,10 @@ function processDataUK(masterRows, allSalesRows) {
     salesByLocation[key].push(sale);
   });
 
-  // Join sales to events (date-filtered)
+  // Join sales to events (campaign + date-filtered)
   events.forEach(event => {
-    const allSales = salesByLocation[event.showName.toLowerCase()] || [];
+    const allSales = (salesByLocation[event.showName.toLowerCase()] || [])
+      .filter(s => campaignMatchesEvent(s.campaign, event.campaignGroup));
     let eventSales = allSales;
     if (event.startDate && event.endDate) {
       const rs = new Date(event.startDate); rs.setHours(0,0,0,0);
