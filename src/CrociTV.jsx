@@ -67,7 +67,7 @@ const REGION_COORDINATES = {
   "Dublin": { lat: 53.3498, lng: -6.2603 },
 };
 
-const FLAGS = { "United Kingdom": "\ud83c\uddec\ud83c\udde7", "Ireland": "\ud83c\uddee\ud83c\uddea" };
+const FLAGS = { "United Kingdom": "🇬🇧", "Ireland": "🇮🇪" };
 
 function getCurrencySymbol(country) {
   return country === "Ireland" ? "\u20ac" : "\u00a3";
@@ -174,13 +174,14 @@ async function discoverSalesTabGids() {
     const response = await fetch(SALES_PUBHTML_URL);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const html = await response.text();
-    const tabPattern = /id="sheet-button-(\d+)"[\s\S]*?<a[^>]*>([^<]+)<\/a>/gi;
+    // UK pubhtml uses JS items.push({name: "...", gid: "..."}) format
+    const tabPattern = /name:\s*"([^"]+)"[^}]*gid:\s*"(\d+)"/gi;
     const eventSalesTabs = [];
     const tmmTabs = [];
     let match;
     while ((match = tabPattern.exec(html)) !== null) {
-      const gid = match[1];
-      const name = match[2].trim();
+      const name = match[1].trim();
+      const gid = match[2];
       const weekMatch = name.match(/WK\s*(\d+)/i);
       if (!weekMatch) continue;
       const weekNum = `WK${parseInt(weekMatch[1], 10)}`;
@@ -207,7 +208,7 @@ async function fetchAllSalesTabs(tabs) {
       const res = await fetch(`${SALES_CSV_BASE_URL}?gid=${tab.gid}&single=true&output=csv`);
       if (!res.ok) return [];
       const text = await res.text();
-      return parseCSV(text).slice(2).map(row => ({
+      return parseCSV(text).slice(3).map(row => ({
         row, tabName: tab.name, campaign: tab.campaign, country: tab.country, weekNum: tab.weekNum,
       }));
     } catch { return []; }
@@ -607,7 +608,7 @@ function ShoutoutCard({ card }) {
         display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
         height: "100%", textAlign: "center", padding: 32,
       }}>
-        <div style={{ fontSize: 48, marginBottom: 16 }}>{"\ud83d\udd25"}</div>
+        <div style={{ fontSize: 48, marginBottom: 16 }}>{"🔥"}</div>
         <div style={{ fontSize: 14, color: "#FF00B1", textTransform: "uppercase", letterSpacing: 3, fontWeight: 700, marginBottom: 12, fontFamily: "'Montserrat', sans-serif" }}>
           Milestone
         </div>
@@ -777,10 +778,10 @@ export default function CrociTV() {
           {/* KPI Grid 2x2 */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
             {[
-              { label: "SALES TODAY", value: data?.totalSalesToday || 0, color: "#3CB6BA", icon: "\ud83d\uded2" },
-              { label: "EVENTS LIVE", value: data?.liveCount || 0, color: "#FF00B1", icon: "\ud83d\udce1" },
-              { label: "TOP EVENT", value: data?.topEventToday?.name || "--", isText: true, color: "#FBC500", icon: "\ud83c\udfc6", sub: data?.topEventToday ? `${data.topEventToday.sales} sales` : "" },
-              { label: "STAFF ON SITE", value: data?.staffOnSite || 0, color: "#BE6CFF", icon: "\ud83d\udc65" },
+              { label: "SALES TODAY", value: data?.totalSalesToday || 0, color: "#3CB6BA", icon: "🛒" },
+              { label: "EVENTS LIVE", value: data?.liveCount || 0, color: "#FF00B1", icon: "📡" },
+              { label: "TOP EVENT", value: data?.topEventToday?.name || "--", isText: true, color: "#FBC500", icon: "🏆", sub: data?.topEventToday ? `${data.topEventToday.sales} sales` : "" },
+              { label: "STAFF ON SITE", value: data?.staffOnSite || 0, color: "#BE6CFF", icon: "👥" },
             ].map((kpi, i) => (
               <div key={i} style={{
                 background: "linear-gradient(135deg, #0d1117, #111827)",
@@ -858,7 +859,7 @@ export default function CrociTV() {
         ) : (
           (data?.topAgentsToday || []).map((agent, i) => (
             <div key={agent.name} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 20 }}>{i === 0 ? "\ud83e\udd47" : i === 1 ? "\ud83e\udd48" : "\ud83e\udd49"}</span>
+              <span style={{ fontSize: 20 }}>{i === 0 ? "🥇" : i === 1 ? "🥈" : "🥉"}</span>
               <span style={{ fontSize: 16, fontWeight: 700, color: "#f1f5f9" }}>{agent.name}</span>
               <span style={{ fontSize: 14, fontWeight: 600, color: "#3CB6BA" }}>({agent.count})</span>
             </div>
