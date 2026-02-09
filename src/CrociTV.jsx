@@ -202,18 +202,34 @@ async function discoverSalesTabGids() {
   return { eventSalesTabs: [], tmmTabs: [] };
 }
 
-async function fetchAllSalesTabs(tabs) {
-  const results = await Promise.all(tabs.map(async (tab) => {
+async function fetchSingleTab(tab, retries = 2) {
+  const url = `${SALES_CSV_BASE_URL}?gid=${tab.gid}&single=true&output=csv`;
+  for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(`${SALES_CSV_BASE_URL}?gid=${tab.gid}&single=true&output=csv`);
-      if (!res.ok) return [];
+      if (attempt > 0) await new Promise(r => setTimeout(r, 800 * attempt));
+      const res = await fetch(url);
+      if (!res.ok) continue;
       const text = await res.text();
-      return parseCSV(text).slice(3).map(row => ({
+      if (text.trimStart().startsWith("<")) continue;
+      const rows = parseCSV(text);
+      return rows.slice(3).map(row => ({
         row, tabName: tab.name, campaign: tab.campaign, country: tab.country, weekNum: tab.weekNum,
       }));
-    } catch { return []; }
-  }));
-  return results.flat();
+    } catch { /* retry */ }
+  }
+  return [];
+}
+
+async function fetchAllSalesTabs(tabs) {
+  const BATCH_SIZE = 4;
+  const allResults = [];
+  for (let i = 0; i < tabs.length; i += BATCH_SIZE) {
+    const batch = tabs.slice(i, i + BATCH_SIZE);
+    const batchResults = await Promise.all(batch.map(tab => fetchSingleTab(tab)));
+    allResults.push(...batchResults);
+    if (i + BATCH_SIZE < tabs.length) await new Promise(r => setTimeout(r, 300));
+  }
+  return allResults.flat();
 }
 
 // ── Process Data (UK) ────────────────────────────────────────────────
