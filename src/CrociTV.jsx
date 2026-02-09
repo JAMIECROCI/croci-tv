@@ -168,7 +168,28 @@ function formatDateForUKSales(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-// ── Sales Tab Discovery ──────────────────────────────────────────────
+function getCampaignGroup(client) {
+  if (!client) return "Other";
+  const c = client.toLowerCase();
+  if (c.includes("hellofresh ireland") || c === "hf ie") return "HelloFresh Ireland";
+  if (c.includes("hellofresh") || c.includes("green chef")) return "HelloFresh & Green Chef";
+  if (c.includes("tails")) return "tails.com";
+  return "Other";
+}
+
+// Classify a sale row by its Account Type (Column D) value
+function classifySaleRow(accountType) {
+  const at = (accountType || "").trim().toLowerCase();
+  if (at === "reactivation" || at === "sunp")
+    return { campaign: "TMM Telesales", isTMM: true };
+  if (at === "tails.com activation")
+    return { campaign: "Tails.com", isTMM: false };
+  if (at.includes("hellofresh") || at.includes("green chef"))
+    return { campaign: "HF/GC", isTMM: false };
+  return { campaign: "Unknown", isTMM: false };
+}
+
+// ── Sales Tab Discovery (unified — all tabs as one pool) ─────────────
 async function discoverSalesTabGids() {
   try {
     const response = await fetch(SALES_PUBHTML_URL);
@@ -176,8 +197,7 @@ async function discoverSalesTabGids() {
     const html = await response.text();
     // UK pubhtml uses JS items.push({name: "...", gid: "..."}) format
     const tabPattern = /name:\s*"([^"]+)"[^}]*gid:\s*"(\d+)"/gi;
-    const eventSalesTabs = [];
-    const tmmTabs = [];
+    const allSalesTabs = [];
     let match;
     while ((match = tabPattern.exec(html)) !== null) {
       const name = match[1].trim();
@@ -185,24 +205,17 @@ async function discoverSalesTabGids() {
       const weekMatch = name.match(/WK\s*(\d+)/i);
       if (!weekMatch) continue;
       const weekNum = `WK${parseInt(weekMatch[1], 10)}`;
-      if (/TMM|TELESALES/i.test(name)) {
-        tmmTabs.push({ gid, name, weekNum, campaign: "TMM Telesales", country: "United Kingdom" });
-      } else if (/HF\s*IE/i.test(name)) {
-        eventSalesTabs.push({ gid, name, weekNum, campaign: "HF IE", country: "Ireland" });
-      } else if (/HF[\s/]*GC\s*UK/i.test(name)) {
-        eventSalesTabs.push({ gid, name, weekNum, campaign: "HF/GC UK", country: "United Kingdom" });
-      } else if (/TAILS/i.test(name)) {
-        eventSalesTabs.push({ gid, name, weekNum, campaign: "Tails.com", country: "United Kingdom" });
-      }
+      // No campaign categorisation — classification happens per-row via Account Type
+      allSalesTabs.push({ gid, name, weekNum });
     }
-    if (eventSalesTabs.length > 0 || tmmTabs.length > 0) return { eventSalesTabs, tmmTabs };
+    if (allSalesTabs.length > 0) return allSalesTabs;
   } catch (err) {
     console.warn("Tab discovery failed:", err);
   }
-  return { eventSalesTabs: [], tmmTabs: [] };
+  return [];
 }
 
-async function fetchSingleTab(tab, retries = 3) {
+async function fetchSingleTab(tab, retries = 2) {
   const url = `${SALES_CSV_BASE_URL}?gid=${tab.gid}&single=true&output=csv`;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -229,7 +242,7 @@ async function fetchSingleTab(tab, retries = 3) {
         accountType: headers.indexOf("account type"),
       };
       return rows.slice(headerIdx + 1).map(row => ({
-        row, colMap, tabName: tab.name, campaign: tab.campaign, country: tab.country, weekNum: tab.weekNum,
+        row, colMap, tabName: tab.name, weekNum: tab.weekNum,
       }));
     } catch { /* retry */ }
   }
@@ -249,7 +262,7 @@ async function fetchAllSalesTabs(tabs) {
 }
 
 // ── Process Data (UK) ────────────────────────────────────────────────
-function processDataUK(masterRows, salesDataRows, tmmSalesRows) {
+function processDataUK(masterRows, allSalesRows) {
   const masterData = masterRows.slice(1);
   const today = new Date();
   const currentMonday = getWeekMonday(today);
@@ -266,6 +279,7 @@ function processDataUK(masterRows, salesDataRows, tmmSalesRows) {
     .map((row, index) => ({
       id: `event-${index}`,
       client: (row[6] || "").trim(),
+      campaignGroup: getCampaignGroup((row[6] || "").trim()),
       weekNum: normalizeWeekNum(row[3]),
       startDate: parseMasterDate(row[4]),
       endDate: parseMasterDate(row[5]),
@@ -281,13 +295,14 @@ function processDataUK(masterRows, salesDataRows, tmmSalesRows) {
       country: "United Kingdom",
     }));
 
-  // Parse sales
-  const salesData = salesDataRows
-    .filter(item => item?.row?.length >= 4)
+  // Parse ALL sales entries, classify each row by Account Type (Column D)
+  const allParsed = allSalesRows
+    .filter(item => item && item.row && item.row.length >= 2)
     .map(item => {
       const row = item.row;
       const cm = item.colMap || { date: 0, agent: 1, notListed: 2, location: 3, accountType: 4 };
-      const accountType = (cm.accountType >= 0 ? (row[cm.accountType] || "") : "").trim().toLowerCase();
+      const accountTypeRaw = (cm.accountType >= 0 ? (row[cm.accountType] || "") : "").trim();
+      const classification = classifySaleRow(accountTypeRaw);
       const location = cm.location >= 0 ? (row[cm.location] || "").trim() : "";
       return {
         date: parseUKSalesDate((row[cm.date] || "").trim()),
@@ -297,12 +312,18 @@ function processDataUK(masterRows, salesDataRows, tmmSalesRows) {
           cm.notListed >= 0 ? row[cm.notListed] : ""
         ),
         location,
-        campaign: item.campaign,
-        country: item.country,
+        accountType: accountTypeRaw.toLowerCase(),
+        campaign: classification.campaign,
+        isTMM: classification.isTMM,
         weekNum: item.weekNum,
+        tabName: item.tabName,
       };
     })
-    .filter(s => s && s.date && s.location);
+    .filter(s => s && s.date);
+
+  // Split: event sales (have location, not TMM) vs TMM sales (no location needed)
+  const salesData = allParsed.filter(s => !s.isTMM && s.location);
+  const tmmSales = allParsed.filter(s => s.isTMM);
 
   // Group sales by location
   const salesByLocation = {};
@@ -321,7 +342,7 @@ function processDataUK(masterRows, salesDataRows, tmmSalesRows) {
       const re = new Date(event.endDate); re.setHours(23,59,59,999);
       eventSales = allSales.filter(s => s.date && s.date >= rs && s.date <= re);
     }
-    if (eventSales.some(s => s.country === "Ireland")) event.country = "Ireland";
+    if (event.campaignGroup === "HelloFresh Ireland") event.country = "Ireland";
     event.liveSalesCount = eventSales.length;
     event.uniqueAgents = new Set(eventSales.map(s => s.agentName)).size;
     event._filteredSales = eventSales;
@@ -393,17 +414,7 @@ function processDataUK(masterRows, salesDataRows, tmmSalesRows) {
     .sort((a, b) => (b.date || 0) - (a.date || 0))
     .slice(0, 30);
 
-  // TMM stats
-  const tmmSales = tmmSalesRows
-    .filter(item => item?.row?.length >= 2)
-    .map(item => ({
-      date: parseUKSalesDate(item.row[0]),
-      dateRaw: (item.row[0] || "").trim(),
-      agentName: extractUKAgent(item.row[1], item.row[2]),
-      weekNum: item.weekNum,
-    }))
-    .filter(s => s.date);
-
+  // TMM Telesales: tmmSales already classified from unified parsing above
   const tmmTodayCount = tmmSales.filter(s => s.dateRaw?.startsWith(todayStr)).length;
 
   // Milestone checks
@@ -712,16 +723,15 @@ export default function CrociTV() {
   // Fetch data
   const fetchData = useCallback(async () => {
     try {
-      const [masterRes, { eventSalesTabs, tmmTabs }] = await Promise.all([
+      const [masterRes, allSalesTabs] = await Promise.all([
         fetch(MASTER_TRACKER_URL),
         discoverSalesTabGids(),
       ]);
       if (!masterRes.ok) throw new Error(`HTTP ${masterRes.status}`);
       const masterText = await masterRes.text();
-      const salesRows = await fetchAllSalesTabs(eventSalesTabs);
-      const tmmRows = await fetchAllSalesTabs(tmmTabs);
+      const allSalesRows = await fetchAllSalesTabs(allSalesTabs);
       const masterRows = parseCSV(masterText);
-      const processed = processDataUK(masterRows, salesRows, tmmRows);
+      const processed = processDataUK(masterRows, allSalesRows);
       setData(processed);
       setLoading(false);
     } catch (err) {
