@@ -212,8 +212,24 @@ async function fetchSingleTab(tab, retries = 3) {
       const text = await res.text();
       if (text.trimStart().startsWith("<")) continue;
       const rows = parseCSV(text);
-      return rows.slice(3).map(row => ({
-        row, tabName: tab.name, campaign: tab.campaign, country: tab.country, weekNum: tab.weekNum,
+      // Smart header detection: find the "Submission Date" row
+      let headerIdx = -1;
+      for (let r = 0; r < Math.min(rows.length, 5); r++) {
+        if (rows[r] && rows[r][0] && rows[r][0].toLowerCase().startsWith("submission date")) {
+          headerIdx = r; break;
+        }
+      }
+      if (headerIdx === -1) continue;
+      const headers = rows[headerIdx].map(h => (h || "").trim().toLowerCase());
+      const colMap = {
+        date: 0,
+        agent: headers.indexOf("agent name"),
+        notListed: headers.indexOf("*not listed"),
+        location: headers.indexOf("location"),
+        accountType: headers.indexOf("account type"),
+      };
+      return rows.slice(headerIdx + 1).map(row => ({
+        row, colMap, tabName: tab.name, campaign: tab.campaign, country: tab.country, weekNum: tab.weekNum,
       }));
     } catch { /* retry */ }
   }
@@ -268,16 +284,26 @@ function processDataUK(masterRows, salesDataRows, tmmSalesRows) {
   // Parse sales
   const salesData = salesDataRows
     .filter(item => item?.row?.length >= 4)
-    .map(item => ({
-      date: parseUKSalesDate(item.row[0]),
-      dateRaw: (item.row[0] || "").trim(),
-      agentName: extractUKAgent(item.row[1], item.row[2]),
-      location: (item.row[3] || "").trim(),
-      campaign: item.campaign,
-      country: item.country,
-      weekNum: item.weekNum,
-    }))
-    .filter(s => s.date && s.location);
+    .map(item => {
+      const row = item.row;
+      const cm = item.colMap || { date: 0, agent: 1, notListed: 2, location: 3, accountType: 4 };
+      const accountType = (cm.accountType >= 0 ? (row[cm.accountType] || "") : "").trim().toLowerCase();
+      if (accountType.includes("reactivation")) return null;
+      const location = cm.location >= 0 ? (row[cm.location] || "").trim() : "";
+      return {
+        date: parseUKSalesDate((row[cm.date] || "").trim()),
+        dateRaw: (row[cm.date] || "").trim(),
+        agentName: extractUKAgent(
+          cm.agent >= 0 ? row[cm.agent] : "",
+          cm.notListed >= 0 ? row[cm.notListed] : ""
+        ),
+        location,
+        campaign: item.campaign,
+        country: item.country,
+        weekNum: item.weekNum,
+      };
+    })
+    .filter(s => s && s.date && s.location);
 
   // Group sales by location
   const salesByLocation = {};
