@@ -231,11 +231,11 @@ async function discoverSalesTabGids() {
   return [];
 }
 
-async function fetchSingleTab(tab, retries = 2) {
+async function fetchSingleTab(tab, retries = 3) {
   const url = `${SALES_CSV_BASE_URL}?gid=${tab.gid}&single=true&output=csv`;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      if (attempt > 0) await new Promise(r => setTimeout(r, 1500 * attempt));
+      if (attempt > 0) await new Promise(r => setTimeout(r, 2000 * attempt));
       const res = await fetch(url);
       if (!res.ok) continue;
       const text = await res.text();
@@ -268,13 +268,13 @@ async function fetchSingleTab(tab, retries = 2) {
 }
 
 async function fetchAllSalesTabs(tabs) {
-  const BATCH_SIZE = 3;
+  const BATCH_SIZE = 2;
   const allResults = [];
   for (let i = 0; i < tabs.length; i += BATCH_SIZE) {
     const batch = tabs.slice(i, i + BATCH_SIZE);
     const batchResults = await Promise.all(batch.map(tab => fetchSingleTab(tab)));
     allResults.push(...batchResults);
-    if (i + BATCH_SIZE < tabs.length) await new Promise(r => setTimeout(r, 500));
+    if (i + BATCH_SIZE < tabs.length) await new Promise(r => setTimeout(r, 1000));
   }
   return allResults.flat();
 }
@@ -740,7 +740,7 @@ export default function CrociTV() {
   const [loading, setLoading] = useState(true);
   const leafletLoaded = useLeafletLoader();
 
-  // Fetch data
+  // Fetch data — only fetch current week's sales tabs (~4) instead of all 26
   const fetchData = useCallback(async () => {
     try {
       const [masterRes, allSalesTabs] = await Promise.all([
@@ -749,8 +749,20 @@ export default function CrociTV() {
       ]);
       if (!masterRes.ok) throw new Error(`HTTP ${masterRes.status}`);
       const masterText = await masterRes.text();
-      const allSalesRows = await fetchAllSalesTabs(allSalesTabs);
       const masterRows = parseCSV(masterText);
+
+      // Detect current week from master data (no sales needed)
+      const tempProcessed = processDataUK(masterRows, []);
+      const activeWeek = tempProcessed?.activeWeek;
+
+      // Fetch ONLY current week's tabs (~4 instead of all 26)
+      let allSalesRows = [];
+      if (activeWeek) {
+        const weekTabs = allSalesTabs.filter(t => t.weekNum === activeWeek);
+        console.log(`TV: Fetching ${weekTabs.length} tabs for ${activeWeek}: ${weekTabs.map(t => t.name).join(', ')}`);
+        allSalesRows = await fetchAllSalesTabs(weekTabs);
+      }
+
       const processed = processDataUK(masterRows, allSalesRows);
       setData(processed);
       setLoading(false);
